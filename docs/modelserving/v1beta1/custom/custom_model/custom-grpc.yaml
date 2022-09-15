@@ -1,0 +1,13 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: custom-model
+spec:
+  predictor:
+    containers:
+      - name: kserve-container
+        image: suryasmart619/custom-model-grpc:v1
+        ports:
+        - containerPort: 8081
+          name: h2c
+          protocol: TCP

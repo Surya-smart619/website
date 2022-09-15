@@ -113,7 +113,7 @@ In the `custom.yaml` file edit the container image and replace {username} with y
 
 Apply the yaml to create the InferenceService
 
-!!! "kubectl"
+=== "kubectl"
 ```
 kubectl apply -f custom.yaml
 ```
@@ -177,8 +177,120 @@ curl -v -H "Host: ${SERVICE_HOSTNAME}" http://${INGRESS_HOST}:${INGRESS_PORT}/v1
 {"predictions": [[14.861762046813965, 13.942917823791504, 13.9243803024292, 12.182711601257324, 12.00634765625]]}
 ```
 
-### Delete the InferenceService
-```
-kubectl delete -f custom.yaml
+## Create the gRPC InferenceService
+
+Create InferenceService which exposes the gRPC port and by default it listens on port 8081.
+
+```yaml
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: custom-model
+spec:
+  predictor:
+    containers:
+      - name: kserve-container
+        image: {username}/custom-model:v1
+        ports:
+        - containerPort: 8081
+          name: h2c
+          protocol: TCP
 ```
 
+Apply above yaml to create the gRPC InferenceService.
+
+=== "kubectl"
+```
+kubectl apply -f custom-grpc.yaml
+```
+
+## Run a gRPC prediction
+
+We use a python gRPC client for the prediction, so you need to create client file to write predict script.
+
+```python
+import argparse
+import base64
+import json
+import logging
+
+import grpc
+import grpc_predict_v2_pb2 as pb
+import grpc_predict_v2_pb2_grpc
+
+
+def predict(host, port, hostname, model, input_path):
+    if hostname:
+        host_option = (('grpc.ssl_target_name_override', hostname,),)
+    else:
+        host_option = None
+    with grpc.insecure_channel(f'{host}:{port}', options=host_option) as channel:
+        stub = grpc_predict_v2_pb2_grpc.GRPCInferenceServiceStub(channel)
+        with open(input_path) as json_file:
+            data = json.load(json_file)
+        payload = [
+            {
+                "name": "input-0",
+                "shape": [],
+                "datatype": "BYTES",
+                "contents": {
+                    "bytes_contents": [base64.b64decode(data["instances"][0]["image"]["b64"])]
+                }
+            }
+        ]
+        response = stub.ModelInfer(pb.ModelInferRequest(model_name=model, inputs=payload))
+        print(response)
+
+
+if __name__ == '__main__':
+    logging.basicConfig()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--host', help='Ingress Host Name', default='localhost', type=str)
+    parser.add_argument('--port', help='Ingress Port', default=80, type=int)
+    parser.add_argument('--model', help='TensorFlow Model Name', type=str)
+    parser.add_argument('--hostname', help='Service Host Name', default='', type=str)
+    parser.add_argument('--input_path', help='Prediction data input path',
+                        default='./input.json', type=str)
+
+    args = parser.parse_args()
+    predict(args.host, args.port, args.hostname, args.model, args.input_path)
+
+```
+
+Run the gRPC prediction script.
+
+```bash
+MODEL_NAME=custom-model
+INPUT_PATH=./input.json
+SERVICE_HOSTNAME=$(kubectl get inferenceservice ${MODEL_NAME} -o jsonpath='{.status.url}' | cut -d "/" -f 3)
+
+python client.py \
+--host ${INGRESS_HOST} \
+--port ${INGRESS_PORT} \
+--hostname ${SERVICE_HOSTNAME} \
+--model ${MODEL_NAME} \
+--input_path ${INPUT_PATH}
+```
+
+==** Expected Output **==
+```bash
+model_name: "custom-model"
+id: "f536eccc-9081-4ff8-bcf8-9d55f9f3dee4"
+outputs {
+  name: "input-0"
+  datatype: "FP32"
+  contents {
+    fp32_contents: 14.975619316101074
+    fp32_contents: 14.036808967590332
+    fp32_contents: 13.966033935546875
+    fp32_contents: 12.252279281616211
+    fp32_contents: 12.086268424987793
+  }
+}
+```
+
+### Delete the InferenceService
+
+```bash
+kubectl delete -f custom.yaml
+```
